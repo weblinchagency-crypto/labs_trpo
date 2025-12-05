@@ -1,0 +1,122 @@
+@startuml
+left to right direction
+
+' ==== Акторы ====
+actor "Пользователь системы" as Person
+actor "Пациент" as Patient
+actor "Врач" as Doctor
+actor "Администратор медцентра" as Admin
+actor "Лаборант" as LabTech
+
+' Внешние системы (для интеграций)
+actor "Нац. система\nздравоохранения" as EHealth
+actor "Платёжная система\nЕРИП/банк" as ERIP
+
+' ==== Обобщение акторов (generalization) ====
+Patient --|> Person
+Doctor  --|> Person
+Admin   --|> Person
+LabTech --|> Person
+
+' ==== Границы системы ====
+rectangle "Мобильное приложение «ЛОДЭ»" {
+
+  ' --- Базовые и обобщающие варианты использования ---
+  (Доступ к медицинским данным) as UC_AccessData
+
+  (Онлайн-запись к врачу) as UC_Schedule
+  (Онлайн-консультация) as UC_Consult
+  (Доступ к ЭМК) as UC_EHR
+  (Просмотр результатов анализов) as UC_LabResults
+
+  (Оплата медицинских услуг) as UC_Pay
+  (Напоминания о приёмах) as UC_Reminders
+
+  ' --- Специальные функции и белорусский контекст ---
+  (Запись на аппаратные исследования) as UC_Hardware
+
+  (Выписка электронного рецепта) as UC_eRx
+  (Оформление электронного больничного) as UC_eSick
+
+  (Подписание документов ЭЦП) as UC_EDS
+  (Обмен данными с Республиканской системой здравоохранения) as UC_Sync
+
+  (Оплата через ЕРИП) as UC_ERIP
+  (Оплата картой белорусского банка) as UC_Card
+
+  (Управление расписанием приёма) as UC_ManageAppt
+  (Управление лабораторными исследованиями) as UC_ManageLab
+  (Регистрация пациента) as UC_Register
+  (Загрузка результатов лабораторных исследований) as UC_UploadLab
+
+  ' ==== Обобщение вариантов использования (generalization) ====
+  UC_EHR        --|> UC_AccessData
+  UC_LabResults --|> UC_AccessData
+
+  ' ==== Ассоциации акторов с вариантами использования ====
+  ' Пациент
+  Patient -- UC_Schedule
+  Patient -- UC_Consult
+  Patient -- UC_EHR
+  Patient -- UC_LabResults
+  Patient -- UC_Pay
+  Patient -- UC_Reminders
+
+  ' Врач
+  Doctor -- UC_Consult
+  Doctor -- UC_EHR
+  Doctor -- UC_eRx
+  Doctor -- UC_eSick
+  Doctor -- UC_Reminders
+
+  ' Администратор медцентра
+  Admin -- UC_ManageAppt
+  Admin -- UC_Register
+  Admin -- UC_ManageLab
+
+  ' Лаборант
+  LabTech -- UC_ManageLab
+  LabTech -- UC_UploadLab
+
+  ' Внешние системы
+  EHealth -- UC_Sync
+  ERIP    -- UC_ERIP
+  ERIP    -- UC_Card
+
+  ' ==== Отношения include (включение) ====
+  ' Онлайн-запись всегда использует управление расписанием
+  UC_Schedule ..> UC_ManageAppt : include
+
+  ' Онлайн-консультация всегда использует доступ к данным
+  UC_Consult  ..> UC_AccessData : include
+  ' При необходимости — выписка рецепта
+  UC_Consult  ..> UC_eRx        : include
+
+  ' Доступ к ЭМК и результатам анализов может инициировать обмен с гос.системой
+  UC_LabResults ..> UC_Sync : include
+
+  ' Э-рецепт и э-больничный всегда подписываются ЭЦП и уходят в гос.систему
+  UC_eRx   ..> UC_EDS  : include
+  UC_eRx   ..> UC_Sync : include
+
+  UC_eSick ..> UC_EDS  : include
+  UC_eSick ..> UC_Sync : include
+
+  ' Управление лабораторией всегда включает загрузку результатов
+  UC_ManageLab ..> UC_UploadLab : include
+
+  ' Оплата услуг включает конкретные способы оплаты
+  UC_Pay ..> UC_ERIP : include
+  UC_Pay ..> UC_Card : include
+
+  ' ==== Отношения extend (расширение) ====
+  ' Запись на аппаратные исследования – частный случай онлайн-записи
+  UC_Hardware ..|> UC_Schedule : extend
+
+  ' Напоминания как опциональное расширение базовых сценариев
+  UC_Reminders ..|> UC_Schedule : extend
+  UC_Reminders ..|> UC_Consult  : extend
+  UC_Reminders ..|> UC_Pay      : extend
+}
+
+@enduml
