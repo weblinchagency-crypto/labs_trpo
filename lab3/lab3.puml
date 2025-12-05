@@ -1,0 +1,149 @@
+@startuml
+title Архитектура мобильного приложения "Белпочта" на AWS (диаграмма компонентов)
+
+skinparam componentStyle rectangle
+
+' =========================
+' ФРОНТЕНД-СТЕК
+' =========================
+package "Фронтенд (клиент)" {
+  [Мобильное приложение\n«Белпочта» (iOS/Android)] as Mobile
+  [Экран отслеживания\nотправлений] as TrackUI
+  [Экран вызова курьера] as CourierUI
+  [Модуль управления\nуведомлениями] as NotifUI
+
+  Mobile -- TrackUI
+  Mobile -- CourierUI
+  Mobile -- NotifUI
+}
+
+' =========================
+' БЭКЕНД НА AWS
+' =========================
+package "AWS Cloud — Бэкенд" {
+
+  ' --- Группа: Управление запросами и API ---
+  package "Управление запросами и API" {
+    [API Gateway\n(AWS API Gateway)] as APIGW
+  }
+
+  ' --- Группа: Бизнес-логика ---
+  package "Бизнес-логика" {
+    [Serverless Tracking Function\n(AWS Lambda)] as TrackingFn
+    [Courier Service\n(microservice / Lambda)] as CourierSvc
+    [Notification Service\n(AWS Lambda + Amazon SNS)] as NotifSvc
+  }
+
+  ' --- Группа: Данные и кэширование ---
+  package "Данные и кэширование" {
+    [Tracking Database\n(Amazon DynamoDB)] as TrackDB
+    [Orders Database\n(Amazon RDS/DynamoDB)] as OrdersDB
+    [Service Availability Cache\n(Amazon ElastiCache)] as AvailCache
+  }
+
+  ' --- Группа: Асинхронная обработка ---
+  package "Асинхронная обработка" {
+    [Status Update Queue\n(Amazon SQS)] as StatusQ
+  }
+
+  ' --- Внутренние системы Белпочты ---
+  package "Внутренние системы\n«Белпочты»" {
+    [Система сортировочных\nцентров] as SortSys
+    [Корпоративная система\nуправления заказами] as OMS
+  }
+}
+
+' Дополнительный фронтенд курьера
+package "Фронтенд курьера" {
+  [Мобильное приложение курьера\n(внешний клиент)] as CourierApp
+}
+
+' =========================
+' СВЯЗИ ФРОНТЕНД ↔ БЭКЕНД
+' =========================
+
+' Общая связь клиента с API Gateway
+Mobile --> APIGW : HTTPS REST/JSON\n<<sync>>\n(все операции)
+
+' Специализация по экранам
+TrackUI --> APIGW : Запрос статуса\nотправления\n<<sync>>
+CourierUI --> APIGW : Создание/просмотр\nзаявки курьера\n<<sync>>
+NotifUI <-- NotifSvc : Управление токенами\nи настройками уведомлений\n<<sync>>
+
+' =========================
+' СЦЕНАРИЙ 1: ОТСЛЕЖИВАНИЕ ОТПРАВЛЕНИЯ
+' =========================
+
+' Синхронный путь: пользователь запрашивает статус
+APIGW --> TrackingFn : /trackShipment\n<<sync>>
+TrackingFn --> TrackDB : Чтение статуса\nпо трек-номеру\n<<sync>>
+TrackDB --> TrackingFn
+TrackingFn --> APIGW : Текущий статус\nотправления
+APIGW --> Mobile : Ответ со статусом\nдля отображения в TrackUI
+
+' Асинхронный путь: обновление статуса из внутренних систем
+SortSys --> StatusQ : Сообщения об\nобновлении статуса\n<<async>>
+OMS --> StatusQ : Обновления по\nзаказам и доставкам\n<<async>>
+StatusQ --> TrackingFn : Обработка\nобновлений статуса\n<<async>>
+TrackingFn --> TrackDB : Обновление\nзаписи по отправлению
+TrackingFn --> NotifSvc : Событие\n«статус изменён»\n<<async>>
+NotifSvc --> Mobile : Push-уведомление\nчерез FCM/APNS/SNS\n<<async>>
+
+' =========================
+' СЦЕНАРИЙ 2: ВЫЗОВ КУРЬЕРА
+' =========================
+
+' Синхронный запрос на создание заявки
+APIGW --> CourierSvc : /createCourierOrder\n<<sync>>
+CourierSvc --> AvailCache : Проверка доступности\nпо адресу и дате\n<<sync>>
+AvailCache --> CourierSvc
+
+CourierSvc --> OrdersDB : Создание/обновление\nзаявки курьера\n<<sync>>
+
+' Асинхронное уведомление курьера
+CourierSvc --> NotifSvc : Событие\n«новая заявка курьера»\n<<async>>
+NotifSvc --> CourierApp : Push-уведомление\nо новом задании\n<<async>>
+
+' =========================
+' ПОЯСНИТЕЛЬНЫЕ ЗАМЕТКИ
+' =========================
+
+note top of TrackUI
+Сценарий 1: отслеживание отправления
+1) Пользователь вводит трек-номер на экране отслеживания.
+2) Mobile → API Gateway → Serverless Tracking Function → Tracking Database.
+3) Текущий статус возвращается синхронно в приложение.
+4) При изменении статуса внутренние системы Белпочты
+   отправляют сообщения в Status Update Queue.
+5) Tracking Function обновляет Tracking Database и
+   через Notification Service отправляет push-уведомление пользователю.
+end note
+
+note top of CourierUI
+Сценарий 2: вызов курьера
+1) Пользователь заполняет форму заявки в приложении.
+2) Mobile → API Gateway → Courier Service.
+3) Courier Service проверяет доступность услуги в
+   Service Availability Cache (район, дата, время).
+4) При успешной проверке создаётся запись в Orders Database.
+5) Notification Service асинхронно уведомляет
+   курьера (CourierApp) о новой заявке.
+end note
+
+note right of APIGW
+API Gateway:
+- единая точка входа для мобильных клиентов;
+- маршрутизация по ресурсам (/trackShipment, /courierOrder и др.);
+- авторизация и аутентификация;
+- ограничение частоты запросов (rate limiting).
+end note
+
+note right of NotifSvc
+Notification Service:
+- централизованный хаб уведомлений;
+- отправка push-уведомлений пользователям и курьерам;
+- интеграция с AWS SNS, FCM, APNS;
+- использует токены, управляемые мобильным приложением.
+end note
+
+@enduml
